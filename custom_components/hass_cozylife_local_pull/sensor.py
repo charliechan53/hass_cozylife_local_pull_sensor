@@ -44,7 +44,7 @@ def setup_platform(
     sensors = []
     for item in hass.data[DOMAIN]['tcp_client']:
         if SWITCH_TYPE_CODE == item.device_type_code:
-            sensors.append(CozyLifeSensor(item, '28', 'kW'))
+            sensors.append(CozyLifeSensor(item, '28', 'W'))
             sensors.append(CozyLifeSensor(item, '2', 'kWh'))
             sensors.append(CozyLifeSensor(item, '26', 'kWh'))
     
