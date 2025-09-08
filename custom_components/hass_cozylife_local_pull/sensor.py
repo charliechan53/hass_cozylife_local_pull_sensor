@@ -6,6 +6,7 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
+from homeassistant.helpers.restore_state import RestoreEntity
 from typing import Any, Final, Literal, TypedDict, final
 from .const import (
     DOMAIN,
@@ -124,7 +125,7 @@ class CozyLifePowerSensor(SensorEntity):
         self._refresh_state()
 
 
-class CozyLifeEnergySensorIntegrated(SensorEntity):
+class CozyLifeEnergySensorIntegrated(RestoreEntity, SensorEntity):
     """Energy sensor that integrates power readings over time."""
     
     def __init__(self, tcp_client, power_entity_id, unit, sensor_type) -> None:
@@ -140,6 +141,25 @@ class CozyLifeEnergySensorIntegrated(SensorEntity):
         self._sensor_type = sensor_type
         self._last_update = None
         self._last_power = None
+        self._restored = False
+    
+    async def async_added_to_hass(self):
+        """Restore previous state when entity is added to hass."""
+        await super().async_added_to_hass()
+        
+        # Restore the last state
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state not in (None, "unknown", "unavailable"):
+            try:
+                self._state = float(last_state.state)
+                _LOGGER.info(f"Restored energy state for {self._unique_id}: {self._state} kWh")
+                self._restored = True
+            except ValueError:
+                _LOGGER.warning(f"Could not restore energy state for {self._unique_id}, starting from 0")
+                self._state = 0.0
+        else:
+            _LOGGER.info(f"No previous state found for {self._unique_id}, starting from 0")
+            self._state = 0.0
     
     @property
     def name(self) -> str:
