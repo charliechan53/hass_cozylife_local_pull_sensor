@@ -44,9 +44,19 @@ def setup_platform(
     sensors = []
     for item in hass.data[DOMAIN]['tcp_client']:
         if SWITCH_TYPE_CODE == item.device_type_code:
-            sensors.append(CozyLifePowerSensor(item, '28', 'W', 'power'))
-            sensors.append(CozyLifeEnergySensor(item, '2', 'kWh', 'energy_total'))
-            sensors.append(CozyLifeEnergySensor(item, '26', 'kWh', 'energy_daily'))
+            # Create power sensor
+            power_sensor = CozyLifePowerSensor(item, '28', 'W', 'power')
+            sensors.append(power_sensor)
+            
+            # Create energy sensor using integration of power sensor
+            power_entity_id = f"sensor.pw_28_{item.device_id}"
+            energy_sensor = CozyLifeEnergySensorIntegrated(
+                item, 
+                power_entity_id, 
+                'kWh', 
+                'energy'
+            )
+            sensors.append(energy_sensor)
     
     add_entities(sensors)
 
@@ -114,32 +124,22 @@ class CozyLifePowerSensor(SensorEntity):
         self._refresh_state()
 
 
-class CozyLifeEnergySensor(SensorEntity):
-    _tcp_client = None
-    _state = None
+class CozyLifeEnergySensorIntegrated(SensorEntity):
+    """Energy sensor that integrates power readings over time."""
     
-    def __init__(self, tcp_client, fld, unit, sensor_type) -> None:
+    def __init__(self, tcp_client, power_entity_id, unit, sensor_type) -> None:
         """Initialize the energy sensor."""
-        _LOGGER.info('__init__')
+        _LOGGER.info('CozyLifeEnergySensorIntegrated __init__')
         self._tcp_client = tcp_client
-        self._unique_id = 'en_' + fld + '_' + tcp_client.device_id
+        self._power_entity_id = power_entity_id
+        self._unique_id = 'en_int_' + tcp_client.device_id
         self.attrs: dict[str, Any] = {}
-        name_suffix = 'Total Energy' if sensor_type == 'energy_total' else 'Daily Energy'
-        self._name = tcp_client.device_model_name + ' ' + tcp_client.device_id[-4:] + ' ' + name_suffix
-        self._state = None
-        self._refresh_state()
-        self._fld = fld
+        self._name = tcp_client.device_model_name + ' ' + tcp_client.device_id[-4:] + ' Energy'
+        self._state = 0.0
         self._unit = unit
         self._sensor_type = sensor_type
-    
-    def _refresh_state(self):
-        try:
-            raw_value = self._tcp_client.query()[self._fld]
-            # Convert from Wh to kWh if needed
-            if raw_value is not None:
-                self._state = round(float(raw_value) / 1000, 3) if self._unit == 'kWh' else raw_value
-        except Exception:
-            self._state = 0     
+        self._last_update = None
+        self._last_power = None
     
     @property
     def name(self) -> str:
@@ -172,14 +172,44 @@ class CozyLifeEnergySensor(SensorEntity):
     @property
     def state_class(self):
         """Return the state class."""
-        if self._sensor_type == 'energy_total':
-            return SensorStateClass.TOTAL_INCREASING
-        else:
-            return SensorStateClass.TOTAL
+        return SensorStateClass.TOTAL_INCREASING
     
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return self.attrs
+        """Return extra state attributes."""
+        attrs = self.attrs.copy()
+        attrs['power_source'] = self._power_entity_id
+        attrs['integration_method'] = 'trapezoidal'
+        return attrs
 
     async def async_update(self):
-        self._refresh_state()
+        """Update the energy sensor by integrating power over time."""
+        try:
+            # Get current power reading directly from TCP client
+            current_power = self._tcp_client.query().get('28', 0)
+            if current_power is None:
+                current_power = 0
+            current_power = float(current_power)
+            
+            from datetime import datetime
+            current_time = datetime.now()
+            
+            if self._last_update is not None and self._last_power is not None:
+                # Calculate time difference in hours
+                time_diff = (current_time - self._last_update).total_seconds() / 3600
+                
+                if time_diff > 0 and time_diff < 1:  # Only integrate if reasonable time diff
+                    # Trapezoidal integration: average power * time
+                    avg_power = (current_power + self._last_power) / 2
+                    energy_increment = (avg_power * time_diff) / 1000  # Convert W*h to kWh
+                    
+                    if energy_increment >= 0:  # Only add positive increments
+                        self._state = round(float(self._state) + energy_increment, 6)
+            
+            # Store current values for next iteration
+            self._last_power = current_power
+            self._last_update = current_time
+            
+        except Exception as e:
+            _LOGGER.warning(f"Error updating energy sensor {self._unique_id}: {e}")
+            # Don't update state on error to maintain total_increasing property
