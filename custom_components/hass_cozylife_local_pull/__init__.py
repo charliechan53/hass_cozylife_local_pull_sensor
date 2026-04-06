@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.discovery import async_load_platform
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.helpers import discovery
 import logging
 import time
 from .const import (
@@ -48,9 +48,8 @@ def setup(hass: HomeAssistant, config: ConfigType) -> bool:
     #wait for get device info from tcp conncetion
     #but it is bad
     time.sleep(3)
-    # _LOGGER.info('setup', hass, config)
-    discovery.load_platform(hass, 'sensor', DOMAIN, {}, config)
-    discovery.load_platform(hass, 'light', DOMAIN, {}, config)
-    discovery.load_platform(hass, 'switch', DOMAIN, {}, config)
+    hass.loop.call_soon_threadsafe(hass.async_create_task, async_load_platform(hass, 'sensor', DOMAIN, {}, config))
+    hass.loop.call_soon_threadsafe(hass.async_create_task, async_load_platform(hass, 'light', DOMAIN, {}, config))
+    hass.loop.call_soon_threadsafe(hass.async_create_task, async_load_platform(hass, 'switch', DOMAIN, {}, config))
     
     return True
